@@ -1,7 +1,7 @@
 //! Defines various piece specific logic, the home of the Piece struct.
 
 use rand::{self, Rng, RngCore};
-use std::{any::Any, fmt};
+use std::{any::Any, fmt, ops::{Range, RangeInclusive}};
 
 use crate::common::*;
 
@@ -86,6 +86,37 @@ pub struct Piece {
     /// Raw fear is the fear before calculations.
     raw_fear: f32,
 }
+
+/// Locates a friendless piece within the range, will not return a king or a queen.\
+/// EXCEPT `except`, this index will not be returned as well, can be set to a big value and ignored.
+fn find_friendless_except(pieces: &[Piece; CLASSIC_PIECES_N], range: &RangeInclusive<usize>, except: usize) -> Option<usize> {
+    let mut rng = rand::thread_rng();
+    // I know 5 is arbitrary but it makes sense here so shut up
+    for _ in 0..=5 {
+        let i = rng.gen_range(range.clone());
+
+        if pieces[i].friend == -1
+            && pieces[i].class != Class::King
+            && pieces[i].class != Class::Queen
+            && i != except
+        {
+            return Some(i);
+        }
+    }
+
+    None
+}
+
+fn find_friendless(pieces: &[Piece; CLASSIC_PIECES_N], range: &RangeInclusive<usize>) -> Option<usize> {
+    find_friendless_except(pieces, range, usize::MAX)
+}
+
+fn find_friendless_pair(pieces: &[Piece; CLASSIC_PIECES_N], range: &RangeInclusive<usize>) -> Option<[usize; 2]> {
+    find_friendless(pieces, range).and_then(|a| {
+        find_friendless_except(pieces, range, a).map(|b| [a, b])
+    })
+}
+
 impl Piece {
     pub fn get_class(&self) -> Class {
         Class::Pawn
@@ -93,7 +124,7 @@ impl Piece {
 
     /// Generates the classic set of pieces, utilizes regular `new()`.
     ///
-    /// The array is flat, it goes: Special black pieces in order, then all the pawns in order, then the white pawns in order, then the special white pieces in order. As if we scan each piece on the board from left to right.
+    /// The array is flat, it has an order that just makes it easier to add friends.
     pub fn generate_classic() -> [Piece; CLASSIC_PIECES_N] {
         let mut pieces = [
             Piece::new(Class::Rook, Side::Black, &[0, 0]),
@@ -134,9 +165,32 @@ impl Piece {
         ];
 
         // Add a friend
-        for i in 0..pieces.len() {
-            // pieces[i].find_friend(i, &pieces);
+        let mut rng = rand::thread_rng();
 
+        // Same friendship generation for both sides
+        for side_i in 0..=1 {
+            let pawns_start = 8 + (side_i as usize) * 8; // Pawns start index for this side
+            let specs_start = (side_i as usize) * 24; // Special pieces start index
+
+            // The pawn friendships that are to be generated, at most 4.
+            for i in 0..rng.gen_range(2..=4) {
+                let friendless = find_friendless_pair(&pieces, &(pawns_start..=(pawns_start+7)));
+                if let Some(pair) = friendless {
+                    pieces[pair[0]].friend = pair[1] as i8;
+                    pieces[pair[1]].friend = pair[0] as i8;
+                }
+            }
+
+            // The specs friendships, at most 3, which would mean everyone except the king and queen, they have no friends!
+            // Duplicate code...
+            for i in 0..rng.gen_range(0..=3) {
+                let friendless = find_friendless_pair(&pieces, &(specs_start..=(specs_start+7)));
+                if let Some(pair) = friendless {
+                    pieces[pair[0]].friend = pair[1] as i8;
+                    pieces[pair[1]].friend = pair[0] as i8;
+                    println!("Friends: {}({:?} {:?}) + {}({:?} {:?})", pieces[pair[0]].name, pieces[pair[0]].side, pieces[pair[0]].class, pieces[pair[1]].name, pieces[pair[1]].side, pieces[pair[1]].class);
+                }
+            }
         }
 
         pieces
@@ -172,10 +226,13 @@ impl Piece {
             },
         };
 
+        let nature: u32 = 0;
+
         Piece {
             class,
             side,
             sex,
+            nature,
             name,
             pos: *pos,
             raw_fear: 0.0,
