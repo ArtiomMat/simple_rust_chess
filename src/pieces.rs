@@ -1,7 +1,11 @@
 //! Defines various piece specific logic, the home of the Piece struct.
 
 use rand::{self, Rng, RngCore};
-use std::{any::Any, fmt, ops::{Range, RangeInclusive}};
+use std::{
+    any::Any,
+    fmt,
+    ops::{Range, RangeInclusive},
+};
 
 use crate::common::*;
 
@@ -75,7 +79,12 @@ pub struct Piece {
     sex: Sex,
     pos: Pos,
     /// A bitmask of various constant booleanic mindsets and states, check out `NAT_` constants.
-    nature: u32,
+    // nature: u32,
+
+    /// Health points
+    hp: i16,
+    /// Strength points
+    sp: i16,
 
     name: String,
     /// The index of the friend within an array of other pieces. `-1` for no friend. Index used because Rust has a period when we use circular references.
@@ -89,9 +98,13 @@ pub struct Piece {
 
 /// Locates a friendless piece within the range, will not return a king or a queen.\
 /// EXCEPT `except`, this index will not be returned as well, can be set to a big value and ignored.
-fn find_friendless_except(pieces: &[Piece; CLASSIC_PIECES_N], range: &RangeInclusive<usize>, except: usize) -> Option<usize> {
+fn find_friendless_except(
+    pieces: &[Piece; CLASSIC_PIECES_N],
+    range: &RangeInclusive<usize>,
+    except: usize,
+) -> Option<usize> {
     let mut rng = rand::thread_rng();
-    // I know 5 is arbitrary but it makes sense here so shut up
+    // Have a limit to not be stuck in an infinite loop if the range is filled
     for _ in 0..=5 {
         let i = rng.gen_range(range.clone());
 
@@ -107,14 +120,45 @@ fn find_friendless_except(pieces: &[Piece; CLASSIC_PIECES_N], range: &RangeInclu
     None
 }
 
-fn find_friendless(pieces: &[Piece; CLASSIC_PIECES_N], range: &RangeInclusive<usize>) -> Option<usize> {
+fn find_friendless(
+    pieces: &[Piece; CLASSIC_PIECES_N],
+    range: &RangeInclusive<usize>,
+) -> Option<usize> {
     find_friendless_except(pieces, range, usize::MAX)
 }
 
-fn find_friendless_pair(pieces: &[Piece; CLASSIC_PIECES_N], range: &RangeInclusive<usize>) -> Option<[usize; 2]> {
-    find_friendless(pieces, range).and_then(|a| {
-        find_friendless_except(pieces, range, a).map(|b| [a, b])
-    })
+fn find_friendless_pair(
+    pieces: &[Piece; CLASSIC_PIECES_N],
+    range: &RangeInclusive<usize>,
+) -> Option<[usize; 2]> {
+    find_friendless(pieces, range)
+        .and_then(|a| find_friendless_except(pieces, range, a).map(|b| [a, b]))
+}
+
+/// Find some friendless pairs within a range, not including king or queen, and make them friends.
+/// Pairs desired is not guaranteed to be the final amount of pairs.
+fn make_friends(
+    pieces: &mut [Piece; CLASSIC_PIECES_N],
+    range: &RangeInclusive<usize>,
+    pairs_desired: usize,
+) {
+    // 0..rng.gen_range(0..=3)
+    for _ in 0..pairs_desired {
+        let friendless = find_friendless_pair(&pieces, &range);
+        if let Some(pair) = friendless {
+            pieces[pair[0]].friend = pair[1] as i8;
+            pieces[pair[1]].friend = pair[0] as i8;
+            /* println!(
+                "Friends: {}({:?} {:?}) + {}({:?} {:?})",
+                pieces[pair[0]].name,
+                pieces[pair[0]].side,
+                pieces[pair[0]].class,
+                pieces[pair[1]].name,
+                pieces[pair[1]].side,
+                pieces[pair[1]].class
+            ); */
+        }
+    }
 }
 
 impl Piece {
@@ -173,24 +217,16 @@ impl Piece {
             let specs_start = (side_i as usize) * 24; // Special pieces start index
 
             // The pawn friendships that are to be generated, at most 4.
-            for i in 0..rng.gen_range(2..=4) {
-                let friendless = find_friendless_pair(&pieces, &(pawns_start..=(pawns_start+7)));
-                if let Some(pair) = friendless {
-                    pieces[pair[0]].friend = pair[1] as i8;
-                    pieces[pair[1]].friend = pair[0] as i8;
-                }
-            }
-
-            // The specs friendships, at most 3, which would mean everyone except the king and queen, they have no friends!
-            // Duplicate code...
-            for i in 0..rng.gen_range(0..=3) {
-                let friendless = find_friendless_pair(&pieces, &(specs_start..=(specs_start+7)));
-                if let Some(pair) = friendless {
-                    pieces[pair[0]].friend = pair[1] as i8;
-                    pieces[pair[1]].friend = pair[0] as i8;
-                    println!("Friends: {}({:?} {:?}) + {}({:?} {:?})", pieces[pair[0]].name, pieces[pair[0]].side, pieces[pair[0]].class, pieces[pair[1]].name, pieces[pair[1]].side, pieces[pair[1]].class);
-                }
-            }
+            make_friends(
+                &mut pieces,
+                &(pawns_start..=(pawns_start + 7)),
+                rng.gen_range(2..=4),
+            );
+            make_friends(
+                &mut pieces,
+                &(specs_start..=(specs_start + 7)),
+                rng.gen_range(0..=3),
+            );
         }
 
         pieces
@@ -223,45 +259,36 @@ impl Piece {
                 } else {
                     Sex::Female
                 }
-            },
+            }
         };
 
         let nature: u32 = 0;
+
+        // HP and SP setup
+        let (hp, sp) = match class {
+            Class::King => (5, 1),
+            Class::Queen => (15, 15),
+            Class::Bishop => (10, 10),
+            Class::Rook => (10, 10),
+            Class::Knight => (12, 12),
+            Class::Pawn => (3, 2),
+        };
 
         Piece {
             class,
             side,
             sex,
-            nature,
+
+            hp,
+            sp,
+
             name,
             pos: *pos,
             raw_fear: 0.0,
-            enemy: -1, // No enemies at the start
+            enemy: -1,  // No enemies at the start
             friend: -1, // Handled when actually initializing the entire piece set
         }
     }
-
-    /// Finds a friend in a classic pieces array, but may also not find a friend.
-    /// `i` is the piece's own index.
-    /// mut rng = rand::thread_rng();
-
-    //     // May not have a friend :(
-    //     if self.class == Class::King
-    //         || self.class == Class::Queen
-    //         || (0..=3).contains(&rng.gen_range(0..=10))
-    //     {
-    //         return;
-    //     }
-
-    //     // If a pawn then a special piece as a friend, and vice versa. Because it's not common for a pawn to have a fucking bishop as a friend is it?
-    //     let special_friend = (0..=3).contains(&rng.gen_range(0..=10));
-
-    //     if self.class == Class::Pawn {
-    //         let 
-    //     } else {
-            
-    //     }
-    // }
 
     fn legal_moves(&self, legals: &mut LegalMoves) -> usize {
         0
